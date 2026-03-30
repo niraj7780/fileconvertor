@@ -1,932 +1,657 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  Upload,
-  Moon,
-  Sun,
-  Download,
-  ArrowRight,
-  FileText,
-  Image as ImageIcon,
-  Scissors,
-  Minimize2,
-  Layers3,
-  Sparkles,
-  CheckCircle2,
-  X,
-  AlertCircle,
-  FileUp,
-  Wand2,
-  Shield,
-  Zap,
-  MoveVertical,
-} from "lucide-react";
-import { jsPDF } from "jspdf";
-
-const TOOLS = [
-  {
-    id: "image-to-pdf",
-    title: "Image to PDF",
-    desc: "Convert one or many images into a professional PDF.",
-    icon: FileText,
-    real: true,
-  },
-  {
-    id: "pdf-to-image",
-    title: "PDF to Image",
-    desc: "Export PDF pages as image files.",
-    icon: ImageIcon,
-    real: false,
-  },
-  {
-    id: "merge-images-pdf",
-    title: "Merge Images into PDF",
-    desc: "Combine multiple images into a single PDF document.",
-    icon: Layers3,
-    real: true,
-  },
-  {
-    id: "split-pdf",
-    title: "Split PDF",
-    desc: "Split a PDF into multiple pages or ranges.",
-    icon: Scissors,
-    real: false,
-  },
-  {
-    id: "compress-pdf",
-    title: "Compress PDF",
-    desc: "Reduce PDF size for easier sharing and uploads.",
-    icon: Minimize2,
-    real: false,
-  },
-  {
-    id: "resize-image",
-    title: "Resize Image",
-    desc: "Resize image dimensions right in your browser.",
-    icon: MoveVertical,
-    real: true,
-  },
-  {
-    id: "jpg-to-png",
-    title: "JPG to PNG",
-    desc: "Convert JPG images into transparent-ready PNG format.",
-    icon: Wand2,
-    real: true,
-  },
-  {
-    id: "png-to-jpg",
-    title: "PNG to JPG",
-    desc: "Convert PNG files into lightweight JPG images.",
-    icon: Wand2,
-    real: true,
-  },
-];
-
-const formatBytes = (bytes) => {
-  if (!bytes && bytes !== 0) return "-";
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-};
-
-const isImage = (file) => file.type.startsWith("image/");
-const isPdf = (file) => file.type === "application/pdf";
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function makeGradientClass(index) {
-  const gradients = [
-    "from-violet-500/20 via-fuchsia-500/10 to-cyan-500/20",
-    "from-cyan-500/20 via-sky-500/10 to-indigo-500/20",
-    "from-pink-500/20 via-rose-500/10 to-orange-500/20",
-    "from-emerald-500/20 via-teal-500/10 to-cyan-500/20",
-  ];
-  return gradients[index % gradients.length];
-}
-
-async function readImageDimensions(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new window.Image();
-      img.onload = () => resolve({ width: img.width, height: img.height, src: reader.result });
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-async function fileToDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-async function convertImageFormat(file, targetMime) {
-  const { width, height, src } = await readImageDimensions(file);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-
-  if (!ctx) {
-    throw new Error("Canvas is not supported in this browser.");
-  }
-
-  if (targetMime === "image/jpeg") {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-  }
-
-  const img = new window.Image();
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-    img.src = src;
-  });
-
-  ctx.drawImage(img, 0, 0, width, height);
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error("Failed to generate converted image."));
-          return;
-        }
-        const ext = targetMime === "image/png" ? "png" : targetMime === "image/webp" ? "webp" : "jpg";
-        resolve(new File([blob], `${file.name.replace(/\.[^.]+$/, "")}.${ext}`, { type: targetMime }));
-      },
-      targetMime,
-      0.92
-    );
-  });
-}
-
-async function resizeImage(file, width, height, outputMime = file.type || "image/png") {
-  const data = await fileToDataURL(file);
-  const img = new window.Image();
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-    img.src = data;
-  });
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-
-  if (!ctx) {
-    throw new Error("Canvas is not supported in this browser.");
-  }
-
-  if (outputMime === "image/jpeg") {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-  }
-
-  ctx.drawImage(img, 0, 0, width, height);
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error("Failed to resize the image."));
-          return;
-        }
-        const ext = outputMime === "image/png" ? "png" : outputMime === "image/webp" ? "webp" : "jpg";
-        resolve(new File([blob], `${file.name.replace(/\.[^.]+$/, "")}-${width}x${height}.${ext}`, { type: outputMime }));
-      },
-      outputMime,
-      0.9
-    );
-  });
-}
-
-async function imagesToPdf(files) {
-  const pdf = new jsPDF({ unit: "pt", format: "a4" });
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const data = await fileToDataURL(file);
-    const img = new window.Image();
-
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-      img.src = data;
-    });
-
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const ratio = Math.min(pageWidth / img.width, pageHeight / img.height);
-    const renderWidth = img.width * ratio;
-    const renderHeight = img.height * ratio;
-    const x = (pageWidth - renderWidth) / 2;
-    const y = (pageHeight - renderHeight) / 2;
-
-    if (i > 0) pdf.addPage();
-
-    const format = file.type.includes("png") ? "PNG" : "JPEG";
-    pdf.addImage(data, format, x, y, renderWidth, renderHeight, undefined, "FAST");
-  }
-
-  return pdf.output("blob");
-}
-
-function BlobBackground({ darkMode }) {
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      {[...Array(6)].map((_, i) => (
-        <motion.div
-          key={i}
-          className={`absolute rounded-full blur-3xl ${darkMode ? "opacity-20" : "opacity-30"}`}
-          style={{
-            width: 220 + i * 30,
-            height: 220 + i * 30,
-            left: `${(i * 17) % 90}%`,
-            top: `${(i * 13) % 80}%`,
-            background:
-              i % 2 === 0
-                ? "linear-gradient(135deg, rgba(99,102,241,0.8), rgba(236,72,153,0.5))"
-                : "linear-gradient(135deg, rgba(34,197,94,0.7), rgba(59,130,246,0.5))",
-          }}
-          animate={{ x: [0, 30, -20, 0], y: [0, -25, 20, 0], scale: [1, 1.1, 0.95, 1] }}
-          transition={{ duration: 10 + i, repeat: Infinity, ease: "easeInOut" }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function Notification({ note, onClose }) {
-  return (
-    <AnimatePresence>
-      {note && (
-        <motion.div
-          initial={{ opacity: 0, y: 16, scale: 0.96 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 10, scale: 0.96 }}
-          className="fixed bottom-6 right-6 z-50 max-w-sm"
-        >
-          <div
-            className={`rounded-2xl border p-4 shadow-2xl backdrop-blur-xl ${
-              note.type === "error"
-                ? "border-red-400/30 bg-red-500/10 text-red-100"
-                : "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              {note.type === "error" ? <AlertCircle className="mt-0.5 h-5 w-5" /> : <CheckCircle2 className="mt-0.5 h-5 w-5" />}
-              <div className="flex-1">
-                <div className="font-semibold">{note.title}</div>
-                <div className="text-sm opacity-90">{note.message}</div>
-              </div>
-              <button onClick={onClose} className="rounded-lg p-1 hover:bg-white/10">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
-
-function DevNotes() {
-  return (
-    <div className="mt-8 rounded-2xl border border-dashed border-white/10 bg-black/10 p-4 text-xs leading-6 opacity-70">
-      <div className="font-semibold">Sanity checks</div>
-      <ul className="mt-2 list-disc pl-5">
-        <li>JPG to PNG should output .png files and keep multiple uploads.</li>
-        <li>PNG to JPG should output .jpg files with white background fill.</li>
-        <li>Resize Image should respect width and height inputs.</li>
-        <li>Image to PDF and Merge Images into PDF should create a single downloadable PDF.</li>
-        <li>Download buttons should work without the file-saver package.</li>
-      </ul>
-    </div>
-  );
-}
-
-export default function FileConverterWebsite() {
-  const [darkMode, setDarkMode] = useState(true);
-  const [selectedTool, setSelectedTool] = useState("image-to-pdf");
-  const [convertTo, setConvertTo] = useState("PDF");
-  const [files, setFiles] = useState([]);
-  const [dragActive, setDragActive] = useState(false);
-  const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [downloadables, setDownloadables] = useState([]);
-  const [note, setNote] = useState(null);
-  const [resizeWidth, setResizeWidth] = useState(1200);
-  const [resizeHeight, setResizeHeight] = useState(800);
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    document.title = "Convert Files Instantly – PDF, PNG, JPG & More";
-
-    const ensureMeta = (selector, attr, value) => {
-      let el = document.querySelector(selector);
-      if (!el) {
-        el = document.createElement("meta");
-        el.setAttribute(attr, value);
-        document.head.appendChild(el);
-      }
-      return el;
-    };
-
-    ensureMeta('meta[name="description"]', "name", "description").setAttribute(
-      "content",
-      "Fast, secure and free online file converter. Convert images, PDFs and more with a modern responsive tool."
-    );
-    ensureMeta('meta[property="og:title"]', "property", "og:title").setAttribute(
-      "content",
-      "Convert Files Instantly – PDF, PNG, JPG & More"
-    );
-    ensureMeta('meta[property="og:description"]', "property", "og:description").setAttribute(
-      "content",
-      "Modern animated file converter website with PDF and image tools."
-    );
-    ensureMeta('meta[property="og:type"]', "property", "og:type").setAttribute("content", "website");
-  }, []);
-
-  useEffect(() => {
-    if (!note) return;
-    const t = setTimeout(() => setNote(null), 3500);
-    return () => clearTimeout(t);
-  }, [note]);
-
-  useEffect(() => {
-    return () => {
-      files.forEach((item) => {
-        if (item.preview) URL.revokeObjectURL(item.preview);
-      });
-    };
-  }, [files]);
-
-  const filteredFormats = useMemo(() => {
-    switch (selectedTool) {
-      case "jpg-to-png":
-        return ["PNG"];
-      case "png-to-jpg":
-        return ["JPG"];
-      case "resize-image":
-        return ["PNG", "JPG", "WEBP"];
-      case "image-to-pdf":
-      case "merge-images-pdf":
-        return ["PDF"];
-      default:
-        return ["PDF", "PNG", "JPG", "WEBP"];
-    }
-  }, [selectedTool]);
-
-  useEffect(() => {
-    setConvertTo(filteredFormats[0]);
-  }, [filteredFormats]);
-
-  const clearFiles = () => {
-    files.forEach((item) => {
-      if (item.preview) URL.revokeObjectURL(item.preview);
-    });
-    setFiles([]);
-    setDownloadables([]);
-  };
-
-  const handleFiles = (incoming) => {
-    const list = Array.from(incoming || []);
-    if (!list.length) return;
-
-    const allowed = list.filter((f) => {
-      if (["image-to-pdf", "merge-images-pdf", "jpg-to-png", "png-to-jpg", "resize-image"].includes(selectedTool)) {
-        return isImage(f);
-      }
-      if (["pdf-to-image", "split-pdf", "compress-pdf"].includes(selectedTool)) {
-        return isPdf(f);
-      }
-      return true;
-    });
-
-    if (!allowed.length) {
-      setNote({
-        type: "error",
-        title: "Unsupported file",
-        message: "Please upload the correct file type for the selected tool.",
-      });
-      return;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Convert Files Instantly – PDF, PNG, JPG & More</title>
+  <meta name="description" content="Fast, secure and free online file converter. Convert images, PDFs and more with a modern responsive tool." />
+  <meta property="og:title" content="Convert Files Instantly – PDF, PNG, JPG & More" />
+  <meta property="og:description" content="Modern animated file converter website with PDF and image tools." />
+  <meta property="og:type" content="website" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    :root {
+      --bg1: #020617;
+      --bg2: #0f172a;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --card: rgba(255, 255, 255, 0.08);
+      --border: rgba(255, 255, 255, 0.12);
     }
 
-    const enriched = allowed.map((file, index) => ({
-      id: `${file.name}-${file.size}-${Date.now()}-${index}`,
-      file,
-      preview: isImage(file) ? URL.createObjectURL(file) : null,
-    }));
-
-    setFiles((prev) => [...prev, ...enriched]);
-    setDownloadables([]);
-  };
-
-  const removeFile = (id) => {
-    setFiles((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target?.preview) URL.revokeObjectURL(target.preview);
-      return prev.filter((item) => item.id !== id);
-    });
-  };
-
-  const moveFile = (index, direction) => {
-    const updated = [...files];
-    const newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= updated.length) return;
-    [updated[index], updated[newIndex]] = [updated[newIndex], updated[index]];
-    setFiles(updated);
-  };
-
-  const onDrop = (e) => {
-    e.preventDefault();
-    setDragActive(false);
-    handleFiles(e.dataTransfer.files);
-  };
-
-  const resetProcessing = () => {
-    setProcessing(false);
-    setProgress(0);
-  };
-
-  const simulateProgress = () => {
-    let current = 0;
-    return setInterval(() => {
-      current += Math.random() * 18;
-      setProgress((prev) => Math.min(92, Math.max(prev, current)));
-    }, 250);
-  };
-
-  const convertFiles = async () => {
-    if (!files.length) {
-      setNote({ type: "error", title: "No files uploaded", message: "Please upload at least one file to continue." });
-      return;
+    body.light {
+      --bg1: #f8fafc;
+      --bg2: #e2e8f0;
+      --text: #0f172a;
+      --muted: #475569;
+      --card: rgba(255, 255, 255, 0.72);
+      --border: rgba(148, 163, 184, 0.25);
     }
 
-    if (selectedTool === "resize-image" && (!Number(resizeWidth) || !Number(resizeHeight) || Number(resizeWidth) <= 0 || Number(resizeHeight) <= 0)) {
-      setNote({ type: "error", title: "Invalid size", message: "Please enter valid width and height values greater than zero." });
-      return;
+    body {
+      font-family: Inter, Poppins, Manrope, system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.18), transparent 25%),
+        radial-gradient(circle at 80% 20%, rgba(34, 197, 94, 0.14), transparent 25%),
+        radial-gradient(circle at 50% 80%, rgba(236, 72, 153, 0.14), transparent 25%),
+        linear-gradient(135deg, var(--bg1), var(--bg2));
+      min-height: 100vh;
+      overflow-x: hidden;
     }
 
-    const tool = TOOLS.find((t) => t.id === selectedTool);
-    if (!tool?.real) {
-      setNote({
-        type: "error",
-        title: "UI ready, logic pending",
-        message: "This tool card is designed and connected, but the full browser conversion logic is marked for backend or advanced PDF processing integration.",
-      });
-      return;
+    .glass {
+      background: var(--card);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.18);
     }
 
-    setProcessing(true);
-    setDownloadables([]);
-    const timer = simulateProgress();
-
-    try {
-      let results = [];
-
-      if (selectedTool === "image-to-pdf" || selectedTool === "merge-images-pdf") {
-        const blob = await imagesToPdf(files.map((f) => f.file));
-        results = [{ name: "converted-images.pdf", blob, size: blob.size }];
-      }
-
-      if (selectedTool === "jpg-to-png") {
-        results = await Promise.all(
-          files.map(async ({ file }) => {
-            const out = await convertImageFormat(file, "image/png");
-            return { name: out.name, blob: out, size: out.size };
-          })
-        );
-      }
-
-      if (selectedTool === "png-to-jpg") {
-        results = await Promise.all(
-          files.map(async ({ file }) => {
-            const out = await convertImageFormat(file, "image/jpeg");
-            return { name: out.name, blob: out, size: out.size };
-          })
-        );
-      }
-
-      if (selectedTool === "resize-image") {
-        const mime = convertTo === "PNG" ? "image/png" : convertTo === "WEBP" ? "image/webp" : "image/jpeg";
-        results = await Promise.all(
-          files.map(async ({ file }) => {
-            const out = await resizeImage(file, Number(resizeWidth), Number(resizeHeight), mime);
-            return { name: out.name, blob: out, size: out.size };
-          })
-        );
-      }
-
-      clearInterval(timer);
-      setProgress(100);
-
-      setTimeout(() => {
-        setDownloadables(results);
-        setNote({
-          type: "success",
-          title: "Conversion complete",
-          message: `${results.length} file${results.length > 1 ? "s" : ""} ready to download.`,
-        });
-        resetProcessing();
-      }, 450);
-    } catch (err) {
-      clearInterval(timer);
-      resetProcessing();
-      setNote({
-        type: "error",
-        title: "Conversion failed",
-        message: err?.message || "Something went wrong while processing your files.",
-      });
+    .blob {
+      position: fixed;
+      border-radius: 9999px;
+      filter: blur(60px);
+      z-index: 0;
+      opacity: 0.45;
+      animation: floatBlob 12s ease-in-out infinite;
+      pointer-events: none;
     }
-  };
 
-  const downloadOne = (item) => downloadBlob(item.blob, item.name);
-  const downloadAll = () => downloadables.forEach((item) => downloadBlob(item.blob, item.name));
+    .blob:nth-child(1) { width: 260px; height: 260px; top: 10%; left: 5%; background: rgba(99,102,241,.55); }
+    .blob:nth-child(2) { width: 320px; height: 320px; top: 12%; right: 5%; background: rgba(34,197,94,.35); animation-delay: 2s; }
+    .blob:nth-child(3) { width: 280px; height: 280px; bottom: 8%; left: 35%; background: rgba(236,72,153,.35); animation-delay: 4s; }
 
-  const theme = darkMode ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-900";
-  const glass = darkMode ? "border-white/10 bg-white/5" : "border-slate-200/80 bg-white/70";
+    @keyframes floatBlob {
+      0%,100% { transform: translateY(0) translateX(0) scale(1); }
+      25% { transform: translateY(-18px) translateX(12px) scale(1.04); }
+      50% { transform: translateY(10px) translateX(-12px) scale(0.98); }
+      75% { transform: translateY(-10px) translateX(8px) scale(1.03); }
+    }
 
-  return (
-    <div className={`${theme} min-h-screen overflow-hidden transition-colors duration-500`}>
-      <BlobBackground darkMode={darkMode} />
+    .tool-card, .hover-up, button, .drop-zone {
+      transition: all .28s ease;
+    }
 
-      <div className="relative z-10">
-        <header className="mx-auto flex max-w-7xl items-center justify-between px-4 py-5 sm:px-6 lg:px-8">
-          <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 shadow-xl shadow-violet-500/25">
-              <Sparkles className="h-5 w-5 text-white" />
-            </div>
-            <div>
-              <div className="text-lg font-semibold tracking-tight">ConvertFlow</div>
-              <div className={`text-xs ${darkMode ? "text-slate-400" : "text-slate-500"}`}>Fast file conversion online</div>
-            </div>
-          </motion.div>
+    .tool-card:hover, .hover-up:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 16px 36px rgba(99,102,241,.18);
+    }
 
-          <div className="flex items-center gap-3">
-            <div className={`hidden rounded-full border px-3 py-1 text-xs sm:flex ${glass}`}>
-              <Shield className="mr-2 h-4 w-4" /> Secure browser-based tools
-            </div>
-            <button onClick={() => setDarkMode((v) => !v)} className={`rounded-2xl border p-3 backdrop-blur-xl transition hover:scale-105 ${glass}`}>
-              {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-            </button>
-          </div>
-        </header>
+    .drop-zone.active {
+      border-color: #22d3ee;
+      background: rgba(34, 211, 238, 0.12);
+      transform: scale(1.01);
+    }
 
-        <main>
-          <section className="mx-auto grid max-w-7xl items-center gap-10 px-4 pb-12 pt-8 sm:px-6 lg:grid-cols-2 lg:px-8 lg:pb-16 lg:pt-12">
-            <div>
-              <motion.div
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6 }}
-                className={`inline-flex items-center rounded-full border px-4 py-2 text-sm backdrop-blur-xl ${glass}`}
-              >
-                <Zap className="mr-2 h-4 w-4 text-cyan-400" /> Modern file conversion toolkit
-              </motion.div>
+    .progress-bar > div {
+      transition: width .25s ease;
+    }
 
-              <motion.h1
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.7, delay: 0.05 }}
-                className="mt-6 text-4xl font-semibold leading-tight tracking-tight sm:text-5xl lg:text-6xl"
-              >
-                Convert Files Instantly – PDF, PNG, JPG & More
-              </motion.h1>
+    .spinner {
+      border: 4px solid rgba(255,255,255,.15);
+      border-top: 4px solid #22d3ee;
+      border-radius: 50%;
+      width: 42px;
+      height: 42px;
+      animation: spin 1s linear infinite;
+    }
 
-              <motion.p
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.7, delay: 0.1 }}
-                className={`mt-5 max-w-2xl text-base leading-7 sm:text-lg ${darkMode ? "text-slate-300" : "text-slate-600"}`}
-              >
-                Fast, secure and free online file converter. Upload, preview, convert, resize and download with a premium animated SaaS experience.
-              </motion.p>
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
 
-              <motion.div
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.7, delay: 0.15 }}
-                className="mt-8 flex flex-wrap gap-4"
-              >
-                <button
-                  onClick={() => inputRef.current?.click()}
-                  className="group inline-flex items-center rounded-2xl bg-gradient-to-r from-violet-500 to-cyan-500 px-6 py-3.5 font-medium text-white shadow-xl shadow-violet-500/25 transition hover:-translate-y-0.5"
-                >
-                  <Upload className="mr-2 h-5 w-5" /> Upload Files
-                  <ArrowRight className="ml-2 h-4 w-4 transition group-hover:translate-x-1" />
-                </button>
-                <button
-                  onClick={() => {
-                    setSelectedTool("jpg-to-png");
-                    setNote({ type: "success", title: "Demo mode", message: "Try uploading a JPG image and convert it to PNG." });
-                  }}
-                  className={`inline-flex items-center rounded-2xl border px-6 py-3.5 font-medium backdrop-blur-xl transition hover:-translate-y-0.5 ${glass}`}
-                >
-                  <Sparkles className="mr-2 h-5 w-5" /> Try Demo
-                </button>
-              </motion.div>
+    .thumb {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border-radius: 16px;
+    }
 
-              <motion.div
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.7, delay: 0.2 }}
-                className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-3"
-              >
-                {[
-                  { title: "Secure", desc: "Files stay in your browser for supported tools." },
-                  { title: "Responsive", desc: "Perfect on desktop, tablet and mobile." },
-                  { title: "Fast UI", desc: "Smooth animations and quick workflows." },
-                ].map((item) => (
-                  <div key={item.title} className={`rounded-3xl border p-5 backdrop-blur-xl ${glass}`}>
-                    <div className="text-lg font-semibold">{item.title}</div>
-                    <div className={`mt-2 text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>{item.desc}</div>
-                  </div>
-                ))}
-              </motion.div>
+    .fade-in {
+      animation: fadeIn .4s ease;
+    }
 
-              <DevNotes />
-            </div>
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="blob"></div>
+  <div class="blob"></div>
+  <div class="blob"></div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 30, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ duration: 0.7 }}
-              className={`relative rounded-[32px] border p-5 shadow-2xl backdrop-blur-2xl ${glass}`}
-            >
-              <div className={`absolute inset-0 rounded-[32px] bg-gradient-to-br ${darkMode ? "from-white/10 via-transparent to-cyan-500/10" : "from-white/70 via-white/20 to-cyan-100/70"}`} />
-              <div className="relative">
-                <div className="mb-4 flex items-center justify-between gap-4">
-                  <div>
-                    <div className="text-xl font-semibold">Main Converter Tool</div>
-                    <div className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Drag, drop, preview and convert files with ease.</div>
-                  </div>
-                  <div className={`rounded-2xl border px-3 py-2 text-sm ${glass}`}>Active: {TOOLS.find((t) => t.id === selectedTool)?.title}</div>
-                </div>
+  <div class="relative z-10">
+    <header class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-400 flex items-center justify-center text-white text-xl shadow-lg">✦</div>
+        <div>
+          <h1 class="font-semibold text-lg">ConvertFlow</h1>
+          <p class="text-sm" style="color:var(--muted)">Fast file conversion online</p>
+        </div>
+      </div>
+      <button id="themeToggle" class="glass rounded-2xl px-4 py-3 hover-up">🌙</button>
+    </header>
 
-                <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragActive(true);
-                  }}
-                  onDragLeave={() => setDragActive(false)}
-                  onDrop={onDrop}
-                  className={`relative rounded-[28px] border-2 border-dashed p-6 text-center transition ${dragActive ? "border-cyan-400 bg-cyan-500/10" : darkMode ? "border-white/15 bg-white/5" : "border-slate-200 bg-white/60"}`}
-                >
-                  <motion.div animate={{ y: dragActive ? -4 : 0 }} className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 shadow-lg shadow-cyan-500/20">
-                    <FileUp className="h-8 w-8 text-white" />
-                  </motion.div>
-                  <div className="mt-4 text-lg font-semibold">Drag & Drop your files here</div>
-                  <div className={`mt-2 text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Upload multiple files, preview them and convert instantly.</div>
-                  <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-                    <button onClick={() => inputRef.current?.click()} className="rounded-2xl bg-gradient-to-r from-violet-500 to-cyan-500 px-5 py-3 font-medium text-white shadow-lg shadow-violet-500/20 transition hover:scale-[1.02]">
-                      Choose Files
-                    </button>
-                    <div className={`rounded-2xl border px-4 py-3 text-sm ${glass}`}>Supports JPG, PNG, WEBP, PDF</div>
-                  </div>
-                  <input ref={inputRef} type="file" multiple className="hidden" accept="image/*,application/pdf" onChange={(e) => handleFiles(e.target.files)} />
-                </div>
-
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div className={`rounded-2xl border p-4 ${glass}`}>
-                    <label className={`mb-2 block text-sm ${darkMode ? "text-slate-300" : "text-slate-700"}`}>Convert to</label>
-                    <select
-                      value={convertTo}
-                      onChange={(e) => setConvertTo(e.target.value)}
-                      className={`w-full rounded-2xl border px-4 py-3 outline-none ${darkMode ? "border-white/10 bg-slate-900/80 text-white" : "border-slate-200 bg-white text-slate-900"}`}
-                    >
-                      {filteredFormats.map((format) => (
-                        <option key={format} value={format}>
-                          {format}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className={`rounded-2xl border p-4 ${glass}`}>
-                    <label className={`mb-2 block text-sm ${darkMode ? "text-slate-300" : "text-slate-700"}`}>Quick tools</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {TOOLS.slice(0, 4).map((tool) => (
-                        <button
-                          key={tool.id}
-                          onClick={() => {
-                            setSelectedTool(tool.id);
-                            clearFiles();
-                          }}
-                          className={`rounded-2xl px-3 py-2 text-sm transition ${selectedTool === tool.id ? "bg-gradient-to-r from-violet-500 to-cyan-500 text-white" : darkMode ? "bg-white/5 hover:bg-white/10" : "bg-slate-100 hover:bg-slate-200"}`}
-                        >
-                          {tool.title}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {selectedTool === "resize-image" && (
-                  <div className={`mt-4 grid gap-4 rounded-2xl border p-4 sm:grid-cols-2 ${glass}`}>
-                    <div>
-                      <label className={`mb-2 block text-sm ${darkMode ? "text-slate-300" : "text-slate-700"}`}>Width</label>
-                      <input value={resizeWidth} onChange={(e) => setResizeWidth(e.target.value)} type="number" className={`w-full rounded-2xl border px-4 py-3 ${darkMode ? "border-white/10 bg-slate-900/80" : "border-slate-200 bg-white"}`} />
-                    </div>
-                    <div>
-                      <label className={`mb-2 block text-sm ${darkMode ? "text-slate-300" : "text-slate-700"}`}>Height</label>
-                      <input value={resizeHeight} onChange={(e) => setResizeHeight(e.target.value)} type="number" className={`w-full rounded-2xl border px-4 py-3 ${darkMode ? "border-white/10 bg-slate-900/80" : "border-slate-200 bg-white"}`} />
-                    </div>
-                  </div>
-                )}
-
-                {files.length > 0 && (
-                  <div className="mt-5 space-y-3">
-                    {files.map((item, index) => (
-                      <motion.div key={item.id} layout className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${glass}`}>
-                        <div className="flex items-center gap-4">
-                          <div className="h-16 w-16 overflow-hidden rounded-2xl border border-white/10 bg-black/10">
-                            {item.preview ? (
-                              <img src={item.preview} alt={item.file.name} className="h-full w-full object-cover" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center">
-                                <FileText className="h-6 w-6 opacity-70" />
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <div className="max-w-[220px] truncate font-medium sm:max-w-xs">{item.file.name}</div>
-                            <div className={`mt-1 text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>
-                              {item.file.type || "Unknown type"} • {formatBytes(item.file.size)}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => moveFile(index, -1)} className={`rounded-xl border px-3 py-2 text-sm ${glass}`}>↑</button>
-                          <button onClick={() => moveFile(index, 1)} className={`rounded-xl border px-3 py-2 text-sm ${glass}`}>↓</button>
-                          <button onClick={() => removeFile(item.id)} className="rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">Remove</button>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-5 flex flex-wrap items-center gap-3">
-                  <button
-                    onClick={convertFiles}
-                    disabled={processing}
-                    className="rounded-2xl bg-gradient-to-r from-violet-500 to-cyan-500 px-6 py-3.5 font-medium text-white shadow-xl shadow-violet-500/20 transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {processing ? "Processing..." : "Convert Files"}
-                  </button>
-                  <button onClick={clearFiles} className={`rounded-2xl border px-6 py-3.5 font-medium ${glass}`}>
-                    Clear
-                  </button>
-                </div>
-
-                <AnimatePresence>
-                  {processing && (
-                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className={`mt-5 overflow-hidden rounded-2xl border p-4 ${glass}`}>
-                      <div className="flex items-center gap-3">
-                        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }} className="h-10 w-10 rounded-full border-4 border-cyan-400/30 border-t-cyan-400" />
-                        <div>
-                          <div className="font-medium">Processing your files...</div>
-                          <div className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Please wait while we convert everything.</div>
-                        </div>
-                      </div>
-                      <div className={`mt-4 h-3 overflow-hidden rounded-full ${darkMode ? "bg-white/10" : "bg-slate-200"}`}>
-                        <motion.div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-500" animate={{ width: `${progress}%` }} />
-                      </div>
-                      <div className={`mt-2 text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>{Math.round(progress)}% complete</div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {downloadables.length > 0 && (
-                  <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className={`mt-5 rounded-2xl border p-4 ${glass}`}>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <div className="flex items-center gap-2 text-lg font-semibold">
-                          <CheckCircle2 className="h-5 w-5 text-emerald-400" /> Conversion completed
-                        </div>
-                        <div className={`mt-1 text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Your files are ready to download.</div>
-                      </div>
-                      <button onClick={downloadAll} className="inline-flex items-center rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-5 py-3 font-medium text-white shadow-lg">
-                        <Download className="mr-2 h-4 w-4" /> Download All
-                      </button>
-                    </div>
-                    <div className="mt-4 space-y-3">
-                      {downloadables.map((item, i) => (
-                        <div key={item.name + i} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${darkMode ? "border-white/10 bg-white/5" : "border-slate-200 bg-white/70"}`}>
-                          <div>
-                            <div className="font-medium">{item.name}</div>
-                            <div className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Output size: {formatBytes(item.size)}</div>
-                          </div>
-                          <button onClick={() => downloadOne(item)} className="inline-flex items-center rounded-2xl border px-4 py-2.5 font-medium transition hover:scale-[1.02]">
-                            <Download className="mr-2 h-4 w-4" /> Download
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-              </div>
-            </motion.div>
-          </section>
-
-          <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-            <div className="mb-6 flex items-end justify-between gap-4">
-              <div>
-                <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">All Tools</h2>
-                <p className={`mt-2 ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Modern cards for all popular file conversion workflows.</p>
-              </div>
-            </div>
-
-            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-              {TOOLS.map((tool, index) => {
-                const Icon = tool.icon;
-                return (
-                  <motion.button
-                    key={tool.id}
-                    whileHover={{ y: -8, scale: 1.01 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => {
-                      setSelectedTool(tool.id);
-                      clearFiles();
-                    }}
-                    className={`group relative overflow-hidden rounded-[28px] border p-5 text-left shadow-xl backdrop-blur-xl ${glass}`}
-                  >
-                    <div className={`absolute inset-0 bg-gradient-to-br ${makeGradientClass(index)} opacity-70`} />
-                    <div className="relative">
-                      <div className="flex items-center justify-between">
-                        <motion.div animate={{ rotate: [0, 6, -6, 0] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut", delay: index * 0.2 }} className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/15 shadow-lg backdrop-blur-md">
-                          <Icon className="h-6 w-6" />
-                        </motion.div>
-                        <div className={`rounded-full px-3 py-1 text-xs ${tool.real ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
-                          {tool.real ? "Ready" : "Scaffolded"}
-                        </div>
-                      </div>
-                      <div className="mt-5 text-lg font-semibold">{tool.title}</div>
-                      <div className={`mt-2 text-sm leading-6 ${darkMode ? "text-slate-200/85" : "text-slate-700"}`}>{tool.desc}</div>
-                      <div className="mt-4 inline-flex items-center text-sm font-medium">
-                        Click to open <ArrowRight className="ml-2 h-4 w-4 transition group-hover:translate-x-1" />
-                      </div>
-                    </div>
-                  </motion.button>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-            <div className={`grid gap-5 rounded-[32px] border p-6 backdrop-blur-xl lg:grid-cols-3 ${glass}`}>
-              {[
-                { title: "Drag & Drop Upload", desc: "Multiple uploads, thumbnails, remove and reorder controls." },
-                { title: "Responsive Experience", desc: "Built with a mobile-first layout for all screen sizes." },
-                { title: "Animated Feedback", desc: "Progress bars, success states, hover motion and notifications." },
-              ].map((item) => (
-                <div key={item.title} className={`rounded-3xl border p-5 ${darkMode ? "border-white/10 bg-white/5" : "border-slate-200 bg-white/70"}`}>
-                  <div className="text-lg font-semibold">{item.title}</div>
-                  <div className={`mt-2 text-sm leading-6 ${darkMode ? "text-slate-400" : "text-slate-600"}`}>{item.desc}</div>
-                </div>
-              ))}
-            </div>
-          </section>
-        </main>
-
-        <footer className="mx-auto max-w-7xl px-4 pb-10 pt-6 sm:px-6 lg:px-8">
-          <div className={`flex flex-col gap-5 rounded-[28px] border p-6 backdrop-blur-xl md:flex-row md:items-center md:justify-between ${glass}`}>
-            <div>
-              <div className="text-lg font-semibold">ConvertFlow</div>
-              <div className={`mt-1 text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Fast and secure file conversion online.</div>
-            </div>
-            <div className="flex flex-wrap gap-4 text-sm">
-              {["About", "Privacy Policy", "Terms", "Contact"].map((link) => (
-                <a key={link} href="#" className="transition hover:opacity-70">
-                  {link}
-                </a>
-              ))}
-            </div>
-          </div>
-        </footer>
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid lg:grid-cols-2 gap-10 items-center">
+      <div>
+        <div class="glass inline-flex items-center rounded-full px-4 py-2 text-sm">⚡ Modern file conversion toolkit</div>
+        <h2 class="mt-6 text-4xl sm:text-5xl lg:text-6xl font-semibold leading-tight">Convert Files Instantly – PDF, PNG, JPG & More</h2>
+        <p class="mt-5 text-base sm:text-lg leading-7 max-w-2xl" style="color:var(--muted)">
+          Fast, secure and free online file converter. Upload, preview, convert, resize and download with a premium animated SaaS experience.
+        </p>
+        <div class="mt-8 flex flex-wrap gap-4">
+          <button id="heroUploadBtn" class="hover-up rounded-2xl bg-gradient-to-r from-violet-500 to-cyan-500 px-6 py-3.5 font-medium text-white">Upload Files</button>
+          <button id="demoBtn" class="glass hover-up rounded-2xl px-6 py-3.5 font-medium">Try Demo</button>
+        </div>
+        <div class="mt-10 grid sm:grid-cols-3 gap-4">
+          <div class="glass rounded-3xl p-5"><h3 class="font-semibold text-lg">Secure</h3><p class="mt-2 text-sm" style="color:var(--muted)">Files stay in your browser for supported tools.</p></div>
+          <div class="glass rounded-3xl p-5"><h3 class="font-semibold text-lg">Responsive</h3><p class="mt-2 text-sm" style="color:var(--muted)">Works on desktop, tablet and mobile.</p></div>
+          <div class="glass rounded-3xl p-5"><h3 class="font-semibold text-lg">Fast UI</h3><p class="mt-2 text-sm" style="color:var(--muted)">Smooth animations and quick workflows.</p></div>
+        </div>
       </div>
 
-      <Notification note={note} onClose={() => setNote(null)} />
-    </div>
-  );
-}
+      <div class="glass rounded-[32px] p-5 relative overflow-hidden">
+        <div class="absolute inset-0 bg-gradient-to-br from-white/10 via-transparent to-cyan-500/10 pointer-events-none"></div>
+        <div class="relative">
+          <div class="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h3 class="text-xl font-semibold">Main Converter Tool</h3>
+              <p class="text-sm" style="color:var(--muted)">Drag, drop, preview and convert files with ease.</p>
+            </div>
+            <div class="glass rounded-2xl px-3 py-2 text-sm">Active: <span id="activeToolLabel">Image to PDF</span></div>
+          </div>
+
+          <div id="dropZone" class="drop-zone rounded-[28px] border-2 border-dashed p-6 text-center" style="border-color:var(--border); background:rgba(255,255,255,.04)">
+            <div class="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-3xl shadow-lg">⇪</div>
+            <h4 class="mt-4 text-lg font-semibold">Drag & Drop your files here</h4>
+            <p class="mt-2 text-sm" style="color:var(--muted)">Upload multiple files, preview them and convert instantly.</p>
+            <div class="mt-5 flex flex-wrap items-center justify-center gap-3">
+              <button id="chooseFilesBtn" class="rounded-2xl bg-gradient-to-r from-violet-500 to-cyan-500 px-5 py-3 font-medium text-white">Choose Files</button>
+              <div class="glass rounded-2xl px-4 py-3 text-sm">Supports JPG, PNG, WEBP, PDF</div>
+            </div>
+            <input id="fileInput" type="file" multiple accept="image/*,application/pdf" class="hidden" />
+          </div>
+
+          <div class="mt-4 grid sm:grid-cols-2 gap-4">
+            <div class="glass rounded-2xl p-4">
+              <label class="block mb-2 text-sm">Convert to</label>
+              <select id="convertTo" class="w-full rounded-2xl px-4 py-3 text-slate-900 outline-none">
+                <option>PDF</option>
+                <option>PNG</option>
+                <option>JPG</option>
+                <option>WEBP</option>
+              </select>
+            </div>
+            <div class="glass rounded-2xl p-4">
+              <label class="block mb-2 text-sm">Quick tools</label>
+              <div class="grid grid-cols-2 gap-2">
+                <button class="quick-tool rounded-2xl px-3 py-2 text-sm bg-gradient-to-r from-violet-500 to-cyan-500 text-white" data-tool="image-to-pdf">Image to PDF</button>
+                <button class="quick-tool rounded-2xl px-3 py-2 text-sm" data-tool="jpg-to-png">JPG to PNG</button>
+                <button class="quick-tool rounded-2xl px-3 py-2 text-sm" data-tool="png-to-jpg">PNG to JPG</button>
+                <button class="quick-tool rounded-2xl px-3 py-2 text-sm" data-tool="resize-image">Resize Image</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="resizeBox" class="glass rounded-2xl p-4 mt-4 hidden">
+            <div class="grid sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block mb-2 text-sm">Width</label>
+                <input id="resizeWidth" type="number" value="1200" class="w-full rounded-2xl px-4 py-3 text-slate-900 outline-none" />
+              </div>
+              <div>
+                <label class="block mb-2 text-sm">Height</label>
+                <input id="resizeHeight" type="number" value="800" class="w-full rounded-2xl px-4 py-3 text-slate-900 outline-none" />
+              </div>
+            </div>
+          </div>
+
+          <div id="fileList" class="mt-5 space-y-3"></div>
+
+          <div class="mt-5 flex flex-wrap gap-3">
+            <button id="convertBtn" class="rounded-2xl bg-gradient-to-r from-violet-500 to-cyan-500 px-6 py-3.5 font-medium text-white">Convert Files</button>
+            <button id="clearBtn" class="glass rounded-2xl px-6 py-3.5 font-medium">Clear</button>
+          </div>
+
+          <div id="processingBox" class="glass rounded-2xl p-4 mt-5 hidden fade-in">
+            <div class="flex items-center gap-3">
+              <div class="spinner"></div>
+              <div>
+                <div class="font-medium">Processing your files...</div>
+                <div class="text-sm" style="color:var(--muted)">Please wait while we convert everything.</div>
+              </div>
+            </div>
+            <div class="progress-bar mt-4 h-3 rounded-full overflow-hidden bg-white/10">
+              <div id="progressFill" class="h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-500" style="width:0%"></div>
+            </div>
+            <div id="progressText" class="mt-2 text-sm" style="color:var(--muted)">0% complete</div>
+          </div>
+
+          <div id="downloadSection" class="glass rounded-2xl p-4 mt-5 hidden fade-in">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div class="text-lg font-semibold">✅ Conversion completed</div>
+                <div class="text-sm" style="color:var(--muted)">Your files are ready to download.</div>
+              </div>
+              <button id="downloadAllBtn" class="rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-5 py-3 font-medium text-white">Download All</button>
+            </div>
+            <div id="downloadList" class="mt-4 space-y-3"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div class="mb-6">
+        <h3 class="text-2xl sm:text-3xl font-semibold">All Tools</h3>
+        <p class="mt-2" style="color:var(--muted)">Modern cards for popular file conversion workflows.</p>
+      </div>
+      <div class="grid sm:grid-cols-2 xl:grid-cols-4 gap-5">
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">📄</div><h4 class="mt-4 text-lg font-semibold">Image to PDF</h4><p class="mt-2 text-sm" style="color:var(--muted)">Convert one or many images into a PDF.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">🖼️</div><h4 class="mt-4 text-lg font-semibold">PDF to Image</h4><p class="mt-2 text-sm" style="color:var(--muted)">Export PDF pages as image files.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">🧩</div><h4 class="mt-4 text-lg font-semibold">Merge PDF</h4><p class="mt-2 text-sm" style="color:var(--muted)">Combine files into one document.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">✂️</div><h4 class="mt-4 text-lg font-semibold">Split PDF</h4><p class="mt-2 text-sm" style="color:var(--muted)">Split PDFs into separate pages.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">🗜️</div><h4 class="mt-4 text-lg font-semibold">Compress PDF</h4><p class="mt-2 text-sm" style="color:var(--muted)">Reduce PDF size for sharing.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">📐</div><h4 class="mt-4 text-lg font-semibold">Resize Image</h4><p class="mt-2 text-sm" style="color:var(--muted)">Resize images directly in browser.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">🔄</div><h4 class="mt-4 text-lg font-semibold">JPG to PNG</h4><p class="mt-2 text-sm" style="color:var(--muted)">Convert JPG files to PNG.</p></div>
+        <div class="tool-card glass rounded-[28px] p-5"><div class="text-3xl">🔁</div><h4 class="mt-4 text-lg font-semibold">PNG to JPG</h4><p class="mt-2 text-sm" style="color:var(--muted)">Convert PNG files to JPG.</p></div>
+      </div>
+    </section>
+
+    <footer class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-10 pt-6">
+      <div class="glass rounded-[28px] p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+        <div>
+          <div class="text-lg font-semibold">ConvertFlow</div>
+          <div class="mt-1 text-sm" style="color:var(--muted)">Fast and secure file conversion online.</div>
+        </div>
+        <div class="flex flex-wrap gap-4 text-sm">
+          <a href="#">About</a>
+          <a href="#">Privacy Policy</a>
+          <a href="#">Terms</a>
+          <a href="#">Contact</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    const { jsPDF } = window.jspdf;
+
+    const fileInput = document.getElementById('fileInput');
+    const chooseFilesBtn = document.getElementById('chooseFilesBtn');
+    const heroUploadBtn = document.getElementById('heroUploadBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const convertBtn = document.getElementById('convertBtn');
+    const demoBtn = document.getElementById('demoBtn');
+    const dropZone = document.getElementById('dropZone');
+    const fileList = document.getElementById('fileList');
+    const convertTo = document.getElementById('convertTo');
+    const processingBox = document.getElementById('processingBox');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const downloadSection = document.getElementById('downloadSection');
+    const downloadList = document.getElementById('downloadList');
+    const downloadAllBtn = document.getElementById('downloadAllBtn');
+    const activeToolLabel = document.getElementById('activeToolLabel');
+    const quickTools = document.querySelectorAll('.quick-tool');
+    const resizeBox = document.getElementById('resizeBox');
+    const resizeWidth = document.getElementById('resizeWidth');
+    const resizeHeight = document.getElementById('resizeHeight');
+    const themeToggle = document.getElementById('themeToggle');
+
+    let currentTool = 'image-to-pdf';
+    let uploadedFiles = [];
+    let convertedFiles = [];
+
+    function showToast(message) {
+      alert(message);
+    }
+
+    function updateToolButtons() {
+      quickTools.forEach(btn => {
+        if (btn.dataset.tool === currentTool) {
+          btn.className = 'quick-tool rounded-2xl px-3 py-2 text-sm bg-gradient-to-r from-violet-500 to-cyan-500 text-white';
+        } else {
+          btn.className = 'quick-tool rounded-2xl px-3 py-2 text-sm glass';
+        }
+      });
+      activeToolLabel.textContent = quickToolsMap[currentTool];
+      resizeBox.classList.toggle('hidden', currentTool !== 'resize-image');
+
+      if (currentTool === 'jpg-to-png') convertTo.value = 'PNG';
+      if (currentTool === 'png-to-jpg') convertTo.value = 'JPG';
+      if (currentTool === 'image-to-pdf') convertTo.value = 'PDF';
+      if (currentTool === 'resize-image' && !['PNG','JPG','WEBP'].includes(convertTo.value)) convertTo.value = 'PNG';
+    }
+
+    const quickToolsMap = {
+      'image-to-pdf': 'Image to PDF',
+      'jpg-to-png': 'JPG to PNG',
+      'png-to-jpg': 'PNG to JPG',
+      'resize-image': 'Resize Image'
+    };
+
+    function formatBytes(bytes) {
+      if (!bytes && bytes !== 0) return '-';
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    function isImage(file) {
+      return file.type.startsWith('image/');
+    }
+
+    function readAsDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function renderFiles() {
+      fileList.innerHTML = '';
+      uploadedFiles.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'glass rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 fade-in';
+
+        row.innerHTML = `
+          <div class="flex items-center gap-4">
+            <div class="w-16 h-16 rounded-2xl overflow-hidden border border-white/10 bg-black/10 flex items-center justify-center">
+              ${item.preview ? `<img src="${item.preview}" class="thumb" alt="${item.file.name}">` : '<span>📄</span>'}
+            </div>
+            <div>
+              <div class="font-medium break-all">${item.file.name}</div>
+              <div class="text-sm" style="color:var(--muted)">${item.file.type || 'Unknown type'} • ${formatBytes(item.file.size)}</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button class="move-up glass rounded-xl px-3 py-2 text-sm" data-index="${index}">↑</button>
+            <button class="move-down glass rounded-xl px-3 py-2 text-sm" data-index="${index}">↓</button>
+            <button class="remove-file rounded-xl px-3 py-2 text-sm text-red-300" style="background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.25)" data-index="${index}">Remove</button>
+          </div>
+        `;
+        fileList.appendChild(row);
+      });
+
+      document.querySelectorAll('.remove-file').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = Number(btn.dataset.index);
+          if (uploadedFiles[i]?.preview) URL.revokeObjectURL(uploadedFiles[i].preview);
+          uploadedFiles.splice(i, 1);
+          renderFiles();
+        });
+      });
+
+      document.querySelectorAll('.move-up').forEach(btn => {
+        btn.addEventListener('click', () => moveFile(Number(btn.dataset.index), -1));
+      });
+
+      document.querySelectorAll('.move-down').forEach(btn => {
+        btn.addEventListener('click', () => moveFile(Number(btn.dataset.index), 1));
+      });
+    }
+
+    function moveFile(index, direction) {
+      const newIndex = index + direction;
+      if (newIndex < 0 || newIndex >= uploadedFiles.length) return;
+      [uploadedFiles[index], uploadedFiles[newIndex]] = [uploadedFiles[newIndex], uploadedFiles[index]];
+      renderFiles();
+    }
+
+    function clearAll() {
+      uploadedFiles.forEach(item => item.preview && URL.revokeObjectURL(item.preview));
+      uploadedFiles = [];
+      convertedFiles = [];
+      fileList.innerHTML = '';
+      downloadList.innerHTML = '';
+      downloadSection.classList.add('hidden');
+      processingBox.classList.add('hidden');
+      progressFill.style.width = '0%';
+      progressText.textContent = '0% complete';
+      fileInput.value = '';
+    }
+
+    function handleIncomingFiles(files) {
+      const list = Array.from(files || []);
+      if (!list.length) return;
+
+      const allowed = list.filter(file => isImage(file));
+      if (!allowed.length) {
+        showToast('Please upload image files for the currently active HTML tools.');
+        return;
+      }
+
+      allowed.forEach(file => {
+        uploadedFiles.push({
+          file,
+          preview: URL.createObjectURL(file)
+        });
+      });
+      renderFiles();
+    }
+
+    function simulateProgress() {
+      let p = 0;
+      processingBox.classList.remove('hidden');
+      return setInterval(() => {
+        p = Math.min(92, p + Math.random() * 18);
+        progressFill.style.width = p + '%';
+        progressText.textContent = Math.round(p) + '% complete';
+      }, 250);
+    }
+
+    async function imageToPdf(files) {
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i].file;
+        const data = await readAsDataURL(file);
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+          img.src = data;
+        });
+
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const ratio = Math.min(pageWidth / img.width, pageHeight / img.height);
+        const w = img.width * ratio;
+        const h = img.height * ratio;
+        const x = (pageWidth - w) / 2;
+        const y = (pageHeight - h) / 2;
+        if (i > 0) pdf.addPage();
+        const format = file.type.includes('png') ? 'PNG' : 'JPEG';
+        pdf.addImage(data, format, x, y, w, h, undefined, 'FAST');
+      }
+      return pdf.output('blob');
+    }
+
+    async function convertImage(file, mime, width = null, height = null) {
+      const data = await readAsDataURL(file);
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = data;
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width || img.width;
+      canvas.height = height || img.height;
+      const ctx = canvas.getContext('2d');
+      if (mime === 'image/jpeg') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => {
+          if (!blob) return reject(new Error('Failed to convert image.'));
+          resolve(blob);
+        }, mime, 0.92);
+      });
+    }
+
+    function renderDownloads() {
+      downloadList.innerHTML = '';
+      convertedFiles.forEach((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'glass rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 fade-in';
+        row.innerHTML = `
+          <div>
+            <div class="font-medium break-all">${item.name}</div>
+            <div class="text-sm" style="color:var(--muted)">Output size: ${formatBytes(item.blob.size)}</div>
+          </div>
+          <button class="download-one rounded-2xl px-4 py-2.5 font-medium glass" data-index="${index}">Download</button>
+        `;
+        downloadList.appendChild(row);
+      });
+
+      document.querySelectorAll('.download-one').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const item = convertedFiles[Number(btn.dataset.index)];
+          downloadBlob(item.blob, item.name);
+        });
+      });
+
+      downloadSection.classList.remove('hidden');
+    }
+
+    async function convertFiles() {
+      if (!uploadedFiles.length) {
+        showToast('Please upload at least one file.');
+        return;
+      }
+
+      if (currentTool === 'resize-image') {
+        const w = Number(resizeWidth.value);
+        const h = Number(resizeHeight.value);
+        if (!w || !h || w <= 0 || h <= 0) {
+          showToast('Please enter valid width and height.');
+          return;
+        }
+      }
+
+      convertedFiles = [];
+      downloadSection.classList.add('hidden');
+      const timer = simulateProgress();
+
+      try {
+        if (currentTool === 'image-to-pdf') {
+          const blob = await imageToPdf(uploadedFiles);
+          convertedFiles = [{ name: 'converted-images.pdf', blob }];
+        }
+
+        if (currentTool === 'jpg-to-png') {
+          for (const item of uploadedFiles) {
+            const blob = await convertImage(item.file, 'image/png');
+            convertedFiles.push({ name: item.file.name.replace(/\.[^.]+$/, '') + '.png', blob });
+          }
+        }
+
+        if (currentTool === 'png-to-jpg') {
+          for (const item of uploadedFiles) {
+            const blob = await convertImage(item.file, 'image/jpeg');
+            convertedFiles.push({ name: item.file.name.replace(/\.[^.]+$/, '') + '.jpg', blob });
+          }
+        }
+
+        if (currentTool === 'resize-image') {
+          const w = Number(resizeWidth.value);
+          const h = Number(resizeHeight.value);
+          const selected = convertTo.value;
+          const mime = selected === 'PNG' ? 'image/png' : selected === 'WEBP' ? 'image/webp' : 'image/jpeg';
+          const ext = selected === 'PNG' ? 'png' : selected === 'WEBP' ? 'webp' : 'jpg';
+
+          for (const item of uploadedFiles) {
+            const blob = await convertImage(item.file, mime, w, h);
+            convertedFiles.push({ name: item.file.name.replace(/\.[^.]+$/, '') + `-${w}x${h}.` + ext, blob });
+          }
+        }
+
+        clearInterval(timer);
+        progressFill.style.width = '100%';
+        progressText.textContent = '100% complete';
+        setTimeout(() => {
+          processingBox.classList.add('hidden');
+          renderDownloads();
+        }, 400);
+      } catch (error) {
+        clearInterval(timer);
+        processingBox.classList.add('hidden');
+        showToast(error.message || 'Conversion failed.');
+      }
+    }
+
+    chooseFilesBtn.addEventListener('click', () => fileInput.click());
+    heroUploadBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', e => handleIncomingFiles(e.target.files));
+    clearBtn.addEventListener('click', clearAll);
+    convertBtn.addEventListener('click', convertFiles);
+    downloadAllBtn.addEventListener('click', () => {
+      convertedFiles.forEach(item => downloadBlob(item.blob, item.name));
+    });
+
+    demoBtn.addEventListener('click', () => {
+      currentTool = 'jpg-to-png';
+      updateToolButtons();
+      showToast('Demo mode selected: JPG to PNG');
+    });
+
+    quickTools.forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentTool = btn.dataset.tool;
+        updateToolButtons();
+        downloadSection.classList.add('hidden');
+      });
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, e => {
+        e.preventDefault();
+        dropZone.classList.add('active');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, e => {
+        e.preventDefault();
+        dropZone.classList.remove('active');
+      });
+    });
+
+    dropZone.addEventListener('drop', e => {
+      handleIncomingFiles(e.dataTransfer.files);
+    });
+
+    themeToggle.addEventListener('click', () => {
+      document.body.classList.toggle('light');
+      themeToggle.textContent = document.body.classList.contains('light') ? '☀️' : '🌙';
+    });
+
+    updateToolButtons();
+  </script>
+</body>
+</html>
